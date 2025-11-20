@@ -1,0 +1,68 @@
+/* ESTILOS BASE */
+.ticket-container {
+    /* Forzamos el ancho a 300px (aprox 80mm) */
+    width: 300px !important; 
+    max-width: 300px !important;
+    
+    background: white;
+    padding: 10px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px;
+    color: black;
+    line-height: 1.2;
+}
+
+/* ESTILOS DE IMPRESIÓN */
+@media print {
+    @page {
+        /* Le decimos al navegador que la hoja es chica */
+        size: 80mm auto;
+        margin: 0;
+    }
+
+    /* Ocultar todo lo demás */
+    body * {
+        visibility: hidden; 
+    }
+    
+    /* Mostrar solo el contenedor del ticket */
+    .ticket-container, .ticket-container * {
+        visibility: visible;
+    }
+
+    /* Posicionar el ticket en la esquina superior izquierda absoluta */
+    .ticket-container {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 280px !important; /* Un poco menos para margen de seguridad */
+        margin: 0 !important;
+        padding-right: 10px;
+    }
+    
+    /* Forzar alineación izquierda para que no se centre en la hoja A4 */
+    #root {
+        display: block;
+        text-align: left;
+    }
+
+    /* LÍNEA DIVISORIA AUTOMÁTICA */
+    .linea-punteada {
+        width: 100%;              /* Ocupa todo el ancho del contenedor padre */
+        border-bottom: 1px dashed black; /* dashed = guiones, dotted = puntitos */
+        height: 1px;
+        margin: 8px 0;            /* Un poco de aire arriba y abajo */
+        display: block;           /* Se asegura de romper línea */
+    }
+}
+
+/* Utilidades (Mantén estas) */
+.text-center { text-align: center; }
+.text-end { text-align: right; }
+.fw-bold { font-weight: bold; }
+.d-flex { display: flex; }
+.justify-content-between { justify-content: space-between; }
+.mb-1 { margin-bottom: 5px; }
+.mb-2 { margin-bottom: 10px; }
+.linea-punteada { border-bottom: 1px dashed black; height: 1px; width: 100%; margin: 5px 0; }
+.campo-escribir { margin-bottom: 5px; }
