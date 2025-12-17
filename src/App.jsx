@@ -13,7 +13,6 @@ import { auth } from './firebase.js';
 // IMPORTACIÓN DE LOGOS
 import logoColor from './images/logoColor.png';
 import logo from './images/logo.png';
-import logoLetras from './images/logoLetras.png';
 
 // Componente para la pantalla de inicio de sesión
 const Login = () => {
@@ -150,15 +149,6 @@ function App() {
                 style={{ maxHeight: '80px', width: 'auto', padding: '2px' }} 
                 className="d-inline-block align-top rounded me-2"
             />
-            <img 
-                src={logoLetras} 
-                alt="IsaKari" 
-                // AUMENTADO: De 50px a 80px de alto y ajustado estilo
-                style={{ maxHeight: '50px', width: 'auto', padding: '2px' }} 
-                className="d-inline-block align-top rounded me-2"
-            />
-            {/* Opcional: Ocultar el texto si el logo ya lo trae, o dejarlo como complemento */}
-            {/* <span className="fw-bold text-warning d-none d-sm-inline ms-2">IsaKari Sushi</span> */}
         </a>
         
         <div className="d-flex gap-2 align-items-center">

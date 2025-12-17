@@ -3,11 +3,14 @@ import './css/Ticket.css';
 // IMPORTAMOS EL LOGO
 import logoIsakari from './images/logoBK.png';
 
-export const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha }) => {
+export const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, descripcion, logoUrl }) => {
   
   const formatoPeso = (valor) => {
     return valor.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
   };
+
+  // Usamos el logo que viene por props o el default importado
+  const logoFinal = logoUrl || logoIsakari;
 
   return (
     <div className="ticket-container">
@@ -15,20 +18,19 @@ export const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha }) => {
       <div className="text-center mb-2">
         {/* --- LOGO AÑADIDO --- */}
         <img 
-            src={logoIsakari} 
+            src={logoFinal} 
             alt="Logo IsaKari Sushi" 
             style={{ 
-                maxWidth: '180px', // Ajusta el tamaño según prefieras
+                maxWidth: '180px', 
                 height: 'auto', 
                 marginBottom: '5px',
-                filter: 'grayscale(100%) contrast(120%)' // Opcional: Ayuda a que se vea mejor al imprimir en b/n
+                // filter: 'grayscale(100%) contrast(120%)' // Puedes descomentar si quieres forzar B/N
             }} 
         />
         {/* -------------------- */}
 
-        {/* Se eliminaron los títulos de texto redundantes */}
-        <p className="m-0 fw-bold">Calle Comercio #1757</p> {/* Dirección se mantiene */}
-        <p className="m-0 mb-2 fw-bold">+56 9 813 51797</p>   {/* Teléfono se mantiene */}
+        <p className="m-0 fw-bold">Calle Comercio #1757</p> 
+        <p className="m-0 mb-2 fw-bold">+56 9 813 51797</p>   
         
         <h3 className="fw-bold mt-2">Mesa {numeroPedido}</h3>
         
@@ -57,9 +59,9 @@ export const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha }) => {
                   </span>
                   
                   {/* DESCRIPCIÓN DEL PRODUCTO (Base de datos) */}
-                  {item.descripcion && (
+                  {item.descripcion_producto && (
                     <div style={{ fontSize: '0.8em', color: '#555', fontStyle: 'italic', lineHeight: '1.1', marginBottom: '2px' }}>
-                        {item.descripcion}
+                        {item.descripcion_producto}
                     </div>
                   )}
 
@@ -75,15 +77,25 @@ export const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha }) => {
                 </div>
             </div>
             
-            {/* FILA INFERIOR: Observación manual */}
+            {/* FILA INFERIOR: Observación manual del ITEM */}
             {item.observacion && (
                 <div className="text-start" style={{ fontSize: '0.95em', marginTop: '2px', fontWeight: 'bold', color: 'black' }}>
-                     {item.observacion.toUpperCase()}
+                    {item.observacion.toUpperCase()}
                 </div>
             )}
           </div>
         ))}
     </div>
+
+    {/* --- OBSERVACIONES GENERALES DEL PEDIDO (Restaurado) --- */}
+    {descripcion && (
+        <div className="my-2">
+            <div className="linea-punteada"></div>
+            <div className="fw-bold">Observación:</div>
+            <div className="text-uppercase" style={{fontSize: '1em', fontWeight: 'bold'}}>{descripcion}</div>
+        </div>
+    )}
+    {/* ------------------------------------------------------- */}
 
       <div className="linea-punteada"></div>
       <div className="d-flex justify-content-between fs-5 fw-bold my-2">

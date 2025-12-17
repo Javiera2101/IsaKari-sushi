@@ -7,6 +7,13 @@ import 'bootstrap-icons/font/bootstrap-icons.css';
 import { ReporteCaja } from './ReporteCaja.jsx';
 import { Ticket } from './Ticket.jsx';
 
+// --- NUEVAS IMPORTACIONES PARA EL CALENDARIO ---
+import DatePicker, { registerLocale } from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
+import { es } from 'date-fns/locale/es'; 
+
+registerLocale('es', es);
+
 // IMPORTACIÓN DE LOGOS
 import logoIsakariPrint from './images/logoBK.png'; 
 import logoIsakariColor from './images/logoColor.png'; 
@@ -53,6 +60,7 @@ export const Caja = ({ user }) => {
   
   const [ventaSeleccionada, setVentaSeleccionada] = useState(null);
   
+  // ESTADO DE FECHA (Objeto Date directo para el DatePicker)
   const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
 
   // Estado para forzar la vista de apertura de caja
@@ -62,6 +70,9 @@ export const Caja = ({ user }) => {
   const [tempMetodo, setTempMetodo] = useState('');
   const [tempPagos, setTempPagos] = useState({ efectivo: 0, debito: 0, transferencia: 0, edenred: 0 });
   const [tempMixtosActivos, setTempMixtosActivos] = useState([]);
+  
+  // NUEVO: Estado para editar el descuento en la corrección de pago
+  const [tempDescuento, setTempDescuento] = useState(0);
 
   const [totales, setTotales] = useState({
     efectivo: 0, debito: 0, transferencia: 0, edenred: 0, 
@@ -97,6 +108,12 @@ export const Caja = ({ user }) => {
     if (ventaSeleccionada) {
         setEditandoPago(false); 
         setTempMetodo(ventaSeleccionada.metodo_pago);
+        
+        // Inicializar descuento temporal
+        // Si ya tenía descuento, lo usamos. Si no, 0.
+        // Convertimos a string para el input si es necesario, o mantenemos número.
+        setTempDescuento(ventaSeleccionada.descuento_porcentaje || 0);
+
         if (ventaSeleccionada.desglose_pago) {
             setTempPagos(ventaSeleccionada.desglose_pago);
             const activos = Object.keys(ventaSeleccionada.desglose_pago).filter(k => ventaSeleccionada.desglose_pago[k] > 0);
@@ -108,13 +125,23 @@ export const Caja = ({ user }) => {
     }
   }, [ventaSeleccionada]);
 
+  // CÁLCULO DINÁMICO DEL TOTAL AL EDITAR
+  // Usamos el 'total_original' si existe (el precio sin descuento), sino el 'total' base
+  const totalBase = ventaSeleccionada ? (ventaSeleccionada.total_original || ventaSeleccionada.total) : 0;
+  
+  // Calculamos el descuento en base al porcentaje temporal
+  const montoDescuentoCalculado = Math.round(totalBase * (tempDescuento / 100));
+  const totalFinalCalculado = totalBase - montoDescuentoCalculado;
+
   const handleInputEdit = (metodo, valorRaw) => {
       const valorLimpio = valorRaw.replace(/\./g, '').replace(/[^0-9]/g, '');
       const val = valorLimpio === '' ? 0 : parseInt(valorLimpio);
       let nuevos = { ...tempPagos, [metodo]: val };
+      
+      // Ajuste automático si hay 2 medios
       if (tempMixtosActivos.length === 2) {
           const otro = tempMixtosActivos.find(m => m !== metodo);
-          const diff = ventaSeleccionada.total_final - val;
+          const diff = totalFinalCalculado - val; // Usamos el nuevo total calculado
           nuevos[otro] = Math.max(0, diff);
       }
       setTempPagos(nuevos);
@@ -136,14 +163,16 @@ export const Caja = ({ user }) => {
             sumaOtros += tempPagos[key];
         }
     });
-    setTempPagos({ ...tempPagos, [metodoDestino]: Math.max(0, ventaSeleccionada.total_final - sumaOtros) });
+    setTempPagos({ ...tempPagos, [metodoDestino]: Math.max(0, totalFinalCalculado - sumaOtros) });
   };
 
   const guardarCambioPago = async () => {
       const totalIngresado = tempPagos.efectivo + tempPagos.debito + tempPagos.transferencia + tempPagos.edenred;
-      if (tempMetodo === 'MIXTO' && totalIngresado !== ventaSeleccionada.total_final) {
-          return alert(`Error: Los montos no suman el total de la venta (${formatoPeso(ventaSeleccionada.total_final)})`);
+      
+      if (tempMetodo === 'MIXTO' && totalIngresado !== totalFinalCalculado) {
+          return alert(`Error: Los montos no suman el total final (${formatoPeso(totalFinalCalculado)})`);
       }
+      
       let datosPago = {};
       let metodoFinal = tempMetodo;
 
@@ -157,15 +186,19 @@ export const Caja = ({ user }) => {
           }
       } else {
           datosPago = null; 
+          // Si es un solo método, no guardamos desglose, pero el total_final se actualiza abajo
       }
 
       try {
           const ref = doc(db, "ordenes", ventaSeleccionada.id);
           await updateDoc(ref, {
               metodo_pago: metodoFinal,
-              desglose_pago: datosPago
+              desglose_pago: datosPago,
+              descuento_porcentaje: tempDescuento, // Guardamos el nuevo descuento
+              total_final: totalFinalCalculado,    // Guardamos el nuevo total
+              total_original: totalBase            // Aseguramos que se mantenga el base
           });
-          alert("✅ Medio de pago actualizado correctamente. Recargando datos...");
+          alert("✅ Pago y descuento actualizados correctamente.");
           setVentaSeleccionada(null);
           await cargarDatosDelDia();
       } catch (e) {
@@ -254,8 +287,6 @@ export const Caja = ({ user }) => {
             setFondoInicialInput(cajaEncontrada.fondo_inicial);
         }
 
-        // --- CORRECCIÓN DE LÓGICA PARA NO MOSTRAR ORDENES "HUERFANAS" ---
-        // Si no encontramos caja para una fecha pasada, no cargamos ventas.
         if (!cajaEncontrada && !isToday(fechaSeleccionada)) {
             setVentasDia([]);
             setTotales({
@@ -266,7 +297,6 @@ export const Caja = ({ user }) => {
             setCargando(false);
             return;
         }
-        // -------------------------------------------------------------------
 
         let inicioVentas = inicioDiaTS;
         let finVentas = finDiaTS;
@@ -313,6 +343,7 @@ export const Caja = ({ user }) => {
         return alert("Error: No se pudo obtener el ID de usuario. Por favor, inicia sesión.");
     }
     
+    setCargando(true);
     try {
         await addDoc(collection(db, "cajas"), {
             fondo_inicial: fondoInicialInput,
@@ -327,6 +358,7 @@ export const Caja = ({ user }) => {
     } catch (e) {
         console.error(e);
         alert("Error al iniciar caja");
+        setCargando(false);
     }
   };
 
@@ -350,6 +382,7 @@ export const Caja = ({ user }) => {
     );
 
     if (confirmacion) {
+        setCargando(true);
         try {
             const ref = doc(db, "cajas", cajaActiva.id);
             await updateDoc(ref, {
@@ -370,6 +403,7 @@ export const Caja = ({ user }) => {
         } catch (e) {
             console.error(e);
             alert("Error al cerrar caja");
+            setCargando(false);
         }
     }
   };
@@ -390,19 +424,29 @@ export const Caja = ({ user }) => {
   const totalEfectivoCalculado = totales.efectivo + fondoCajaDisplay;
 
   // --- RENDERIZADO ---
-  if (!cargando && isToday(fechaSeleccionada) && (!cajaActiva || vistaApertura)) {
+  if (cargando) {
+      return (
+          <div className="container-fluid h-100 bg-light d-flex justify-content-center align-items-center">
+              <div className="text-center">
+                  <div className="spinner-border text-primary" role="status" style={{width: '3rem', height: '3rem'}}>
+                      <span className="visually-hidden">Cargando...</span>
+                  </div>
+                  <h4 className="mt-3 text-muted">Cargando datos de caja...</h4>
+              </div>
+          </div>
+      );
+  }
+
+  if (isToday(fechaSeleccionada) && (!cajaActiva || vistaApertura)) {
       return (
           <div className="container-fluid h-100 bg-light p-5 d-flex justify-content-center align-items-center">
               <div className="card shadow-lg p-5 text-center" style={{maxWidth: '400px'}}>
-                  
-                  {/* --- LOGO COLOR --- */}
                   <img 
                       src={logoIsakariColor} 
                       alt="Iniciar Turno" 
                       className="img-fluid mb-3 rounded"
                       style={{maxHeight: '150px', objectFit: 'contain'}}
                   />
-                  
                   <h2 className="mb-4 fw-bold">Iniciar Nuevo Turno</h2>
                   
                   {cajaActiva && (
@@ -412,8 +456,6 @@ export const Caja = ({ user }) => {
                   )}
 
                   <h5 className="text-muted">Fondo inicial:</h5>
-                  
-                  {/* --- INPUT FORMATEADO CON PESOS Y EVENTO ENTER --- */}
                   <div className="input-group mb-4">
                       <span className="input-group-text fw-bold">$</span>
                       <input 
@@ -446,13 +488,15 @@ export const Caja = ({ user }) => {
               <h2 className="fw-bold text-dark"><i className="bi bi-bar-chart me-2"></i>Cierre de Caja</h2>
               <div className="d-flex align-items-center justify-content-center gap-2 mt-2 mb-5">
                   <h5 className="text-muted m-0">Fecha:</h5>
-                  <input 
-                      type="date"
-                      className="form-control form-control-lg fw-bold"
-                      style={{maxWidth: '220px'}}
-                      value={formatDateForInput(fechaSeleccionada)}
-                      onChange={(e) => handleDateChange(e.target.value)}
-                  />
+                  <div className="custom-datepicker-wrapper">
+                      <DatePicker 
+                          selected={fechaSeleccionada} 
+                          onChange={(date) => setFechaSeleccionada(date)} 
+                          dateFormat="dd-MM-yyyy"
+                          className="form-control form-control-lg fw-bold text-center custom-datepicker-input"
+                          locale="es"
+                      />
+                  </div>
               </div>
               <div className="alert alert-secondary mt-5" role="alert">
                 <i className="bi bi-info-circle-fill me-2"></i> No se encontraron movimientos ni caja activa para este turno.
@@ -470,13 +514,16 @@ export const Caja = ({ user }) => {
             <h2 className="fw-bold text-dark"><i className="bi bi-bar-chart me-2"></i>Cierre de Caja</h2>
             <div className="d-flex align-items-center gap-2 mt-2">
                 <h5 className="text-muted m-0">Fecha:</h5>
-                <input 
-                    type="date"
-                    className="form-control form-control-lg fw-bold"
-                    style={{maxWidth: '220px'}}
-                    value={formatDateForInput(fechaSeleccionada)}
-                    onChange={(e) => handleDateChange(e.target.value)}
-                />
+                 <div className="custom-datepicker-wrapper">
+                      <DatePicker 
+                          selected={fechaSeleccionada} 
+                          onChange={(date) => setFechaSeleccionada(date)} 
+                          dateFormat="dd-MM-yyyy"
+                          className="form-control form-control-lg fw-bold text-center custom-datepicker-input"
+                          locale="es"
+                      />
+                  </div>
+
             </div>
             {cajaActiva && cajaActiva.estado === 'abierta' && (
                 <span className="badge bg-success mt-2 fs-6">
@@ -581,14 +628,13 @@ export const Caja = ({ user }) => {
                           <tr><td colSpan="6" className="text-center py-5">Cargando datos...</td></tr>
                       ) : (
                           ventasDia.length === 0 ? (
-                              <tr><td colSpan="6" className="text-center py-5 text-muted">No se encontraron movimientos.</td></tr>
+                              <tr><td colSpan="6" className="text-center py-5 text-muted">No se encontraron movimientos para este turno.</td></tr>
                           ) : (
                               ventasDia.map(v => (
                                 <tr key={v.id} className={v.estado === 'cancelado' ? 'table-danger' : ''}>
                                     <td>{v.fecha_cierre ? new Date(v.fecha_cierre.seconds * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '-'}</td>
                                     <td><span className="badge bg-dark">#{v.numero_pedido}</span></td>
                                     <td>
-                                        {/* --- MODIFICACIÓN: SOLO 'LOCAL' --- */}
                                         {v.tipo_entrega === 'REPARTO' 
                                             ? <span className={`badge ${v.estado==='cancelado'?'bg-danger':'bg-warning text-dark'}`}><i className="bi bi-car-front-fill me-1"></i>REPARTO</span> 
                                             : <span className={`badge ${v.estado==='cancelado'?'bg-danger':'bg-primary'}`}><i className="bi bi-shop-window me-1"></i>LOCAL {v.mesa && v.mesa !== 'Local' ? `- ${v.mesa}` : ''}</span>
@@ -635,7 +681,6 @@ export const Caja = ({ user }) => {
                             }
                         </h5>
 
-                        {/* --- LISTA DE PRODUCTOS CON OBSERVACIONES --- */}
                         <div className="card mb-3">
                             <ul className="list-group list-group-flush">
                                 {ventaSeleccionada.items.map((item, i) => (
@@ -644,16 +689,14 @@ export const Caja = ({ user }) => {
                                             <span>{item.cantidad} x {item.nombre}</span>
                                             <strong>{formatoPeso(item.precio * item.cantidad)}</strong>
                                         </div>
-                                        {/* MOSTRAR NOTA DEL PRODUCTO SI EXISTE */}
                                         {item.observacion && (
-                                            <small className="text-muted d-block fst-italic ms-2">** {item.observacion}</small>
+                                            <small className="text-muted d-block fst-italic ms-2">{item.observacion}</small>
                                         )}
                                     </li>
                                 ))}
                             </ul>
                         </div>
                         
-                        {/* --- OBSERVACIÓN GENERAL (NUEVO) --- */}
                         {ventaSeleccionada.descripcion && (
                             <div className="alert alert-warning mb-3">
                                 <i className="bi bi-exclamation-circle-fill me-2"></i>
@@ -663,31 +706,25 @@ export const Caja = ({ user }) => {
 
                         {ventaSeleccionada.estado === 'pagado' && (
                             <div className="bg-light p-3 rounded border">
-                                
-                                {/* --- VISUALIZACIÓN DEL TOTAL CON DESCUENTO --- */}
-                                {ventaSeleccionada.descuento_porcentaje > 0 ? (
-                                    <div className="mb-3">
-                                        <div className="d-flex justify-content-between text-muted">
-                                            <span>Subtotal:</span>
-                                            <span>{formatoPeso(ventaSeleccionada.total_original || ventaSeleccionada.total)}</span>
-                                        </div>
-                                        <div className="d-flex justify-content-between text-danger">
-                                            <span>Descuento ({ventaSeleccionada.descuento_porcentaje}%):</span>
-                                            <span>- {formatoPeso((ventaSeleccionada.total_original || ventaSeleccionada.total) - ventaSeleccionada.total_final)}</span>
-                                        </div>
-                                        <hr className="my-2"/>
-                                        <div className="d-flex justify-content-between mb-2">
-                                            <span className="fw-bold fs-5">TOTAL FINAL:</span>
-                                            <span className="fw-bold fs-5 text-success">{formatoPeso(ventaSeleccionada.total_final)}</span>
-                                        </div>
-                                    </div>
-                                ) : (
+                                <div className="mb-3">
+                                    {ventaSeleccionada.descuento_porcentaje > 0 ? (
+                                        <>
+                                            <div className="d-flex justify-content-between text-muted">
+                                                <span>Subtotal:</span>
+                                                <span>{formatoPeso(ventaSeleccionada.total_original || ventaSeleccionada.total)}</span>
+                                            </div>
+                                            <div className="d-flex justify-content-between text-danger">
+                                                <span>Descuento ({ventaSeleccionada.descuento_porcentaje}%):</span>
+                                                <span>- {formatoPeso((ventaSeleccionada.total_original || ventaSeleccionada.total) - ventaSeleccionada.total_final)}</span>
+                                            </div>
+                                            <hr className="my-2"/>
+                                        </>
+                                    ) : null}
                                     <div className="d-flex justify-content-between mb-2">
-                                        <span className="fw-bold">TOTAL:</span>
+                                        <span className="fw-bold fs-5">TOTAL FINAL:</span>
                                         <span className="fw-bold fs-5 text-success">{formatoPeso(ventaSeleccionada.total_final || ventaSeleccionada.total)}</span>
                                     </div>
-                                )}
-                                {/* ---------------------------------------------- */}
+                                </div>
                                 
                                 <hr className="my-2"/>
                                 
@@ -744,9 +781,31 @@ export const Caja = ({ user }) => {
 
                 {editandoPago && (
                     <div className="animation-fade-in">
-                         <h2 className="text-center mb-4 fw-bold text-success">Total: {formatoPeso(ventaSeleccionada.total_final)}</h2>
-                         {/* ... (El resto del bloque de edición de pago se mantiene igual) ... */}
-                         {/* Se omite por brevedad ya que no cambia la lógica de edición en este paso, solo visualización */}
+                         <h2 className="text-center mb-4 fw-bold text-success">
+                             Total: {formatoPeso(totalFinalCalculado)} 
+                             {tempDescuento > 0 && <small className="text-muted fs-6 ms-2">({tempDescuento}% desc)</small>}
+                         </h2>
+                         
+                         {/* --- INPUT DE DESCUENTO EN CORRECCIÓN --- */}
+                         <div className="d-flex justify-content-center mb-3 align-items-center">
+                             <label className="fw-bold me-2">Descuento (%):</label>
+                             <input 
+                                type="number" 
+                                className="form-control text-center border-danger text-danger fw-bold" 
+                                style={{width: '80px'}}
+                                min="0" max="100"
+                                value={tempDescuento}
+                                onChange={(e) => {
+                                    let val = parseInt(e.target.value) || 0;
+                                    if(val > 100) val = 100; if(val < 0) val = 0;
+                                    setTempDescuento(val);
+                                    // Resetear pagos para obligar a recalcular
+                                    setTempPagos({ efectivo: 0, debito: 0, transferencia: 0, edenred: 0 });
+                                }}
+                             />
+                         </div>
+                         {/* ---------------------------------------- */}
+
                          <div className="row g-2 mb-4">
                             {['EFECTIVO', 'DEBITO', 'TRANSFERENCIA', 'EDENRED', 'MIXTO'].map((metodo) => {
                                 const info = configMedios[metodo];
@@ -762,10 +821,9 @@ export const Caja = ({ user }) => {
                                 </div>
                             )})}
                         </div>
-                        
-                         {tempMetodo === 'MIXTO' && (
+
+                        {tempMetodo === 'MIXTO' && (
                             <div className="p-3 bg-light rounded border">
-                                {/* ... Lógica de pago mixto ... */}
                                 <h6 className="mb-2 fw-bold text-primary">1. Selecciona Medios:</h6>
                                 <div className="d-flex gap-2 mb-3 flex-wrap">
                                     {listaMedios.map((m) => (
@@ -777,10 +835,9 @@ export const Caja = ({ user }) => {
                                 {tempMixtosActivos.length > 0 && (
                                     <div className="row g-3">
                                         {tempMixtosActivos.map(key => {
-                                            // ... (Inputs de pago mixto) ...
                                             const info = listaMedios.find(m => m.key === key);
                                             const totalActual = tempPagos.efectivo + tempPagos.debito + tempPagos.transferencia + tempPagos.edenred;
-                                            const falta = ventaSeleccionada.total_final - totalActual;
+                                            const falta = totalFinalCalculado - totalActual;
                                             const mostrarAyuda = tempMixtosActivos.length > 2 && falta > 0;
                                             return (
                                                 <div className="col-6" key={key}>
@@ -799,7 +856,7 @@ export const Caja = ({ user }) => {
                                     </div>
                                 )}
                                 <div className="mt-3 text-end text-muted small">
-                                    Faltan: {formatoPeso(ventaSeleccionada.total_final - (tempPagos.efectivo+tempPagos.debito+tempPagos.transferencia+tempPagos.edenred))}
+                                    Faltan: {formatoPeso(totalFinalCalculado - (tempPagos.efectivo+tempPagos.debito+tempPagos.transferencia+tempPagos.edenred))}
                                 </div>
                             </div>
                         )}

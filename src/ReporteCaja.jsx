@@ -25,7 +25,7 @@ export const ReporteCaja = ({ totales, fondoCaja, ventasCount }) => {
 
       {/* RESUMEN GENERAL */}
       <div className="d-flex fw-bold" style={{fontSize: '1.1em', margin: '10px 0'}}>
-        <span>VENTA TOTAL:  {formatoPeso(totales.totalVentas)}</span>
+        <span>TOTAL:  {formatoPeso(totales.totalVentas)}</span>
       </div>
 
       <div className="d-flex">
@@ -39,10 +39,10 @@ export const ReporteCaja = ({ totales, fondoCaja, ventasCount }) => {
       <div className="border-top-dashed"></div>
 
       {/* DESGLOSE DE DINERO */}
-      <div className="fw-bold mb-1">DINERO EN CAJA:</div>
+      <div className="fw-bold mb-1">Medios de pago :</div>
       
       <div className="d-flex">
-        <span>Efectivo Ventas:  {formatoPeso(totales.efectivo)}</span>
+        <span>Efectivo:  {formatoPeso(totales.efectivo)}</span>
       </div>
 
       <div className="d-flex">

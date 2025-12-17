@@ -2,10 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db } from './firebase.js'; 
 import { 
   collection, getDocs, addDoc, updateDoc, 
-  doc, Timestamp, query, where
+  doc, Timestamp, query, where, limit
 } from 'firebase/firestore'; 
 
-// --- IMPORTACIONES DE ESTILOS ---
 import './css/bootstrap.min.css'; 
 import './css/App.css'; 
 import 'bootstrap-icons/font/bootstrap-icons.css'; 
@@ -19,10 +18,10 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
   
   // Estados inicializados
   const [orden, setOrden] = useState(ordenAEditar ? ordenAEditar.items : []);
-  const [numeroPedido, setNumeroPedido] = useState(1); 
+  const [numeroPedido, setNumeroPedido] = useState(ordenAEditar ? ordenAEditar.numero_pedido : 1); 
   const [tipoEntrega, setTipoEntrega] = useState(ordenAEditar ? (ordenAEditar.tipo_entrega || 'LOCAL') : 'LOCAL');
   
-  // Nota general del pedido (opcional, si quieres mantenerla además de las individuales)
+  // --- RESTAURADO: Estado para Observaciones Generales ---
   const [descripcion, setDescripcion] = useState(ordenAEditar ? (ordenAEditar.descripcion || '') : '');
   
   const [setMesa] = useState(ordenAEditar ? (ordenAEditar.mesa || '') : ''); 
@@ -31,12 +30,13 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
   const [categoriaActual, setCategoriaActual] = useState('');
   const [fechaHora, setFechaHora] = useState('');
   
-  const [cajaAbierta, setCajaAbierta] = useState(true);
+  // CONTROL DE CAJA Y CARGA
+  const [cajaAbierta, setCajaAbierta] = useState(false); // Por defecto cerrada
+  const [cargando, setCargando] = useState(true); // Cargando por defecto
   
-  // ESTADO PARA LA VISTA PREVIA
   const [mostrarVistaPrevia, setMostrarVistaPrevia] = useState(false);
 
-  // Estado para controlar qué producto se está editando (observación)
+  // Estado para edición de observaciones por producto
   const [editandoObservacionId, setEditandoObservacionId] = useState(null);
   const [observacionTemp, setObservacionTemp] = useState('');
 
@@ -51,7 +51,8 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
           setMesa(''); 
           setDescripcion('');
           setTipoEntrega('LOCAL');
-          setNumeroPedido(prev => prev + 1);
+          // Recargamos el folio buscando de nuevo al renderizar o incrementamos temporalmente
+          // setNumeroPedido(prev => prev + 1); 
           volverACategorias();
       } else {
           onTerminarEdicion();
@@ -62,75 +63,66 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
 
   useEffect(() => {
     const inicializarDatos = async () => {
-      const menuSnapshot = await getDocs(collection(db, "menu"));
-      const listaMenu = menuSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setMenu(listaMenu);
+      setCargando(true);
+      try {
+        // 1. Cargar Menú y Verificar Caja en Paralelo
+        const promesaMenu = getDocs(collection(db, "menu"));
+        const qCaja = query(
+            collection(db, "cajas"),
+            where("estado", "==", "abierta"),
+            limit(1)
+        );
+        const promesaCaja = getDocs(qCaja);
 
-      if (!ordenAEditar) {
-        try {
-          const hoy = new Date();
-          let inicioDia = new Date(hoy);
-          inicioDia.setHours(0, 0, 0, 0); 
-          let finDia = new Date(hoy);
-          finDia.setDate(finDia.getDate() + 1); 
-          finDia.setHours(0, 0, 0, 0);
-          
-          const inicioDiaTS = Timestamp.fromDate(inicioDia);
-          const finDiaTS = Timestamp.fromDate(finDia);
+        const [menuSnapshot, cajaSnapshot] = await Promise.all([promesaMenu, promesaCaja]);
 
-          const qCaja = query(
-              collection(db, "cajas"),
-              where("estado", "==", "abierta"),
-              where("fecha_apertura", ">=", inicioDiaTS),
-              where("fecha_apertura", "<", finDiaTS)
-          );
-          
-          const cajaSnapshot = await getDocs(qCaja);
-          let inicioTurnoTS = null;
-          
-          if (!cajaSnapshot.empty) {
-              const cajaActiva = cajaSnapshot.docs[0].data();
-              inicioTurnoTS = cajaActiva.fecha_apertura;
-              setCajaAbierta(true); 
-          } else {
-              inicioTurnoTS = inicioDiaTS; 
-              setCajaAbierta(false); 
-          }
+        // Procesar Menú
+        const listaMenu = menuSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setMenu(listaMenu);
 
-          const qOrdenes = query(
-            collection(db, "ordenes"),
-            where("fecha", ">=", inicioTurnoTS),
-            where("fecha", "<", finDiaTS) 
-          );
+        // Procesar Caja
+        if (!cajaSnapshot.empty) {
+            setCajaAbierta(true);
+            
+            // Si es un pedido nuevo, calculamos el folio basado en la caja
+            if (!ordenAEditar) {
+                const cajaData = cajaSnapshot.docs[0].data();
+                const inicioTurnoTS = cajaData.fecha_apertura;
 
-          const querySnapshot = await getDocs(qOrdenes);
+                const qOrdenes = query(
+                  collection(db, "ordenes"),
+                  where("fecha", ">=", inicioTurnoTS)
+                );
 
-          if (!querySnapshot.empty) {
-            let maxPedido = 0;
-            querySnapshot.docs.forEach(doc => {
-                const data = doc.data();
-                if (data.numero_pedido > maxPedido) {
-                    maxPedido = data.numero_pedido;
-                }
-            });
-            setNumeroPedido(maxPedido + 1);
-          } else {
-            setNumeroPedido(1);
-          }
-        } catch (error) {
-          console.error("Error obteniendo último número:", error);
-          setNumeroPedido(1); 
-          setCajaAbierta(false);
+                const querySnapshot = await getDocs(qOrdenes);
+                let maxPedido = 0;
+                querySnapshot.docs.forEach(doc => {
+                    const data = doc.data();
+                    if (data.numero_pedido > maxPedido) {
+                        maxPedido = data.numero_pedido;
+                    }
+                });
+                setNumeroPedido(maxPedido + 1);
+            }
+        } else {
+            setCajaAbierta(false); 
         }
-      } 
+      } catch (error) {
+          console.error("Error inicializando:", error);
+          setCajaAbierta(false);
+      } finally {
+          setCargando(false);
+      }
     };
 
     inicializarDatos();
   }, [ordenAEditar]); 
 
+  // --- GUARDAR PEDIDO ---
   const enviarCocina = async (imprimir = false) => {
     if (orden.length === 0) return alert("Orden vacía");
     
+    // Validación estricta
     if (!cajaAbierta && !ordenAEditar) {
         return alert("⛔ ERROR: No es posible confirmar un nuevo pedido. Debe iniciar el turno de caja.");
     }
@@ -143,6 +135,7 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
 
     try {
         if (ordenAEditar) {
+            // ACTUALIZAR
             const ordenRef = doc(db, "ordenes", ordenAEditar.id);
             let nuevaMesa = ordenAEditar.mesa;
             if (ordenAEditar.tipo_entrega !== tipoEntrega) {
@@ -154,10 +147,11 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                 total: totalCalculado,
                 tipo_entrega: tipoEntrega,
                 mesa: nuevaMesa,
-                descripcion: descripcion
+                descripcion: descripcion // Guardamos la observación general
             });
             alert("¡Orden ACTUALIZADA!");
         } else {
+            // CREAR NUEVO
             await addDoc(collection(db, "ordenes"), {
                 numero_pedido: numeroPedido,
                 mesa: tipoEntrega === 'LOCAL' ? 'Local' : '', 
@@ -166,7 +160,7 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                 total: totalCalculado,
                 estado: "pendiente",
                 fecha: Timestamp.now(),
-                descripcion: descripcion
+                descripcion: descripcion // Guardamos la observación general
             });
             alert("¡Orden CREADA!");
         }
@@ -179,7 +173,6 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                 setMesa(''); 
                 setDescripcion('');
                 setTipoEntrega('LOCAL');
-                setNumeroPedido(prev => prev + 1);
                 volverACategorias();
              } else {
                 onTerminarEdicion();
@@ -192,6 +185,7 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
     }
   };
 
+  // --- HELPERS ---
   const formatoPeso = (valor) => valor.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
   const categoriasUnicas = [...new Set(menu.map(item => item.categoria))];
   const productosFiltrados = menu.filter(item => item.categoria === categoriaActual);
@@ -200,6 +194,7 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
 
   const agregarAlPedido = (producto) => {
     if (!cajaAbierta && !ordenAEditar) return alert("⛔ Caja cerrada. Inicie el turno para agregar productos.");
+    
     const existe = orden.find(item => item.id === producto.id);
     if (existe) {
       const nuevaOrden = orden.map(item => 
@@ -218,6 +213,7 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
 
   const ajustarCantidad = (id, delta) => {
     if (!cajaAbierta && !ordenAEditar) return alert("⛔ Caja cerrada. No se pueden hacer ajustes.");
+    
     const nuevaOrden = orden.map(item => {
       if (item.id === id) return { ...item, cantidad: Math.max(0, item.cantidad + delta) };
       return item;
@@ -243,36 +239,55 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
 
   const abrirVistaPrevia = () => {
       if (orden.length === 0) return alert("Orden vacía");
-      
       const ahora = new Date();
       const fechaStr = ahora.toLocaleDateString('es-CL') + ' ' + ahora.toLocaleTimeString('es-CL', {hour: '2-digit', minute:'2-digit'});
       setFechaHora(fechaStr);
-      
       setMostrarVistaPrevia(true);
   };
 
+  // --- RENDERIZADO DE CARGA ---
+  if (cargando) {
+      return (
+          <div className="d-flex h-100 align-items-center justify-content-center bg-dark text-white">
+              <div className="spinner-border text-warning" role="status" style={{width: '3rem', height: '3rem'}}>
+                  <span className="visually-hidden">Cargando...</span>
+              </div>
+          </div>
+      );
+  }
+
+  // --- RENDERIZADO PRINCIPAL ---
   return (
     <div className="container-fluid h-100 bg-dark overflow-hidden">
       <div className="row h-100">
         
         <div className="col-8 h-100 d-flex flex-column p-3">
-           {!cajaAbierta && !ordenAEditar ? (
-              <div className="d-flex h-100 align-items-center justify-content-center text-center">
-                  <div className="p-5 bg-secondary text-white rounded shadow">
-                    <i className="bi bi-box-fill display-1 mb-3"></i>
-                    <h2 className="fw-bold">CAJA CERRADA</h2>
-                    <p className="lead">No es posible tomar nuevos pedidos hasta que inicies el turno de caja.</p>
-                    <p className="mt-3">Ve a la sección "Caja / Cierre" para iniciar un nuevo turno.</p>
+          
+          {/* --- PANTALLA DE BLOQUEO (CAJA CERRADA) --- */}
+          {!cajaAbierta && !ordenAEditar ? (
+              <div className="d-flex h-100 flex-column align-items-center justify-content-center text-center">
+                  <div className="p-5 bg-secondary text-white rounded shadow" style={{border: '4px solid #dc3545', maxWidth: '80%'}}>
+                    <i className="bi bi-door-closed-fill display-1 mb-3 text-danger"></i>
+                    <h1 className="fw-bold display-5">CAJA NO INICIADA</h1>
+                    <p className="lead mt-3">Para comenzar a tomar pedidos, primero debes iniciar el turno.</p>
+                    <hr className="my-4" />
+                    <p className="fw-bold text-warning fs-5">
+                        <i className="bi bi-arrow-right-circle me-2"></i>
+                        Ve a la sección "Caja / Cierre" para abrir la caja.
+                    </p>
                   </div>
               </div>
           ) : (
             <>
+                {/* Alerta sutil si estamos editando con caja cerrada */}
                 {!cajaAbierta && ordenAEditar && (
-                    <div className="alert alert-warning text-center mb-3">
-                        <i className="bi bi-exclamation-triangle-fill me-2"></i> ADVERTENCIA: La caja está cerrada, pero puedes guardar esta edición.
+                    <div className="alert alert-warning text-center mb-3 py-2 fw-bold">
+                        <i className="bi bi-exclamation-triangle-fill me-2"></i> 
+                        Estás editando un pedido, pero la caja del día está cerrada.
                     </div>
                 )}
-                
+
+                {/* --- VISTA NORMAL DEL MENÚ --- */}
                 {vista === 'CATEGORIAS' ? (
                     <div className="h-100 d-flex flex-column">
                     <h2 className="text-white mb-4 text-center">Seleccione Categoría</h2>
@@ -304,24 +319,25 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
           )}
         </div>
 
+        {/* COLUMNA DERECHA (TICKET) */}
         <div className="col-4 h-100 bg-white d-flex flex-column p-0 border-start">
           
           <div className={`p-3 border-bottom ${ordenAEditar ? 'bg-success-subtle' : 'bg-light'}`}>
-             <div className="d-flex justify-content-between align-items-center mb-3">
-              <h4 className="m-0 fw-bold">
-                {ordenAEditar ? <><i className="bi bi-pencil-fill me-2"></i>EDITANDO</> : 'Orden Actual'}
-              </h4>
+            <div className="d-flex justify-content-between align-items-center mb-3">
+              <div>
+                  <h4 className="m-0 fw-bold">
+                    {ordenAEditar ? <><i className="bi bi-pencil-fill me-2"></i>EDITANDO</> : 'Orden Actual'}
+                  </h4>
+                  {/* Mostrar mesa si se está editando */}
+                  {ordenAEditar && ordenAEditar.mesa && ordenAEditar.mesa !== 'Local' && (
+                      <small className="text-muted fw-bold">Mesa: {ordenAEditar.mesa}</small>
+                  )}
+              </div>
               <div className="bg-dark text-white px-3 py-1 rounded fs-4 fw-bold">
                 #{numeroPedido}
               </div>
             </div>
             
-            {ordenAEditar && (
-                 <div className="alert alert-secondary text-center fw-bold mb-2">
-                    Estás editando un pedido existente.
-                 </div>
-            )}
-
             {ordenAEditar && (
                 <button className="btn btn-sm btn-danger w-100 mb-2 fw-bold" onClick={onTerminarEdicion}>
                     <i className="bi bi-x-circle me-2"></i>CANCELAR EDICIÓN
@@ -329,8 +345,22 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
             )}
 
             <div className="btn-group w-100" role="group">
-                <button type="button" className={`btn py-3 fw-bold ${tipoEntrega === 'LOCAL' ? 'btn-primary' : 'btn-outline-secondary'}`} onClick={() => setTipoEntrega('LOCAL')}><i className="bi bi-shop-window fs-4 me-2"></i>LOCAL</button>
-                <button type="button" className={`btn py-3 fw-bold ${tipoEntrega === 'REPARTO' ? 'btn-warning' : 'btn-outline-secondary'}`} onClick={() => setTipoEntrega('REPARTO')}><i className="bi bi-car-front-fill fs-4 me-2"></i>REPARTO</button>
+                <button 
+                    type="button" 
+                    className={`btn py-3 fw-bold ${tipoEntrega === 'LOCAL' ? 'btn-primary' : 'btn-outline-secondary'}`} 
+                    onClick={() => setTipoEntrega('LOCAL')}
+                    disabled={!cajaAbierta && !ordenAEditar}
+                >
+                    <i className="bi bi-shop-window fs-4 me-2"></i>LOCAL
+                </button>
+                <button 
+                    type="button" 
+                    className={`btn py-3 fw-bold ${tipoEntrega === 'REPARTO' ? 'btn-warning' : 'btn-outline-secondary'}`} 
+                    onClick={() => setTipoEntrega('REPARTO')}
+                    disabled={!cajaAbierta && !ordenAEditar}
+                >
+                    <i className="bi bi-car-front-fill fs-4 me-2"></i>REPARTO
+                </button>
             </div>
           </div>
 
@@ -345,10 +375,11 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                     <div className="d-flex justify-content-between align-items-start mb-2">
                       <div className="flex-grow-1 me-2">
                           <span className="fw-bold d-block">{item.nombre}</span>
+                          
                           {item.descripcion_producto && (
                               <small className="text-muted d-block fst-italic" style={{fontSize: '0.75rem'}}>{item.descripcion_producto}</small>
                           )}
-                          <small className="text-muted">{formatoPeso(item.precio)} c/u</small>
+                           <small className="text-muted">{formatoPeso(item.precio)} c/u</small>
                       </div>
                       <div className="text-end">
                           <div className="fw-bold">{formatoPeso(item.precio * item.cantidad)}</div>
@@ -356,6 +387,7 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                               className={`btn btn-sm ${item.observacion ? 'btn-warning text-dark' : 'btn-outline-secondary'} mt-1 py-0 px-2`} 
                               onClick={() => iniciarEdicionObservacion(item)}
                               title="Agregar observación al producto"
+                              disabled={!cajaAbierta && !ordenAEditar}
                           >
                               <i className="bi bi-pencil-square"></i> {item.observacion ? 'Editar Nota' : 'Nota'}
                           </button>
@@ -387,9 +419,17 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
 
                     <div className="d-flex justify-content-end">
                       <div className="d-flex align-items-center bg-light rounded border">
-                        <button className="btn btn-sm btn-link text-danger fw-bold px-3 text-decoration-none" onClick={() => ajustarCantidad(item.id, -1)}>−</button>
+                        <button 
+                            className="btn btn-sm btn-link text-danger fw-bold px-3 text-decoration-none" 
+                            onClick={() => ajustarCantidad(item.id, -1)}
+                            disabled={!cajaAbierta && !ordenAEditar}
+                        >−</button>
                         <span className="fw-bold mx-2 fs-5">{item.cantidad}</span>
-                        <button className="btn btn-sm btn-link text-success fw-bold px-3 text-decoration-none" onClick={() => ajustarCantidad(item.id, 1)}>+</button>
+                        <button 
+                            className="btn btn-sm btn-link text-success fw-bold px-3 text-decoration-none" 
+                            onClick={() => ajustarCantidad(item.id, 1)}
+                            disabled={!cajaAbierta && !ordenAEditar}
+                        >+</button>
                       </div>
                     </div>
                   </li>
@@ -399,6 +439,20 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
           </div>
 
           <div className="p-3 bg-light border-top shadow-sm">
+            
+            {/* --- RESTAURADO: CAMPO DE OBSERVACIONES GENERALES --- */}
+            <div className="mb-3">
+                <label className="form-label fw-bold text-muted small">OBSERVACIONES GENERALES:</label>
+                <textarea 
+                    className="form-control" 
+                    rows="2" 
+                    placeholder="Ej: Envolver todo junto..."
+                    value={descripcion}
+                    onChange={(e) => setDescripcion(e.target.value)}
+                    disabled={!cajaAbierta && !ordenAEditar}
+                ></textarea>
+            </div>
+            {/* ----------------------------------------------------- */}
 
             <div className="d-flex justify-content-between mb-3">
               <span className="h3 text-dark">Total</span>

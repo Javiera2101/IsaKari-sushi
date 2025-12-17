@@ -256,7 +256,7 @@ export const MesasActivas = ({ onEditar }) => {
                           <td>{item.cantidad}</td>
                           <td>
                               {item.nombre}
-                              {item.observacion && <div className="small text-muted fst-italic">** {item.observacion}</div>}
+                              {item.observacion && <div className="small text-muted fst-italic"> {item.observacion}</div>}
                           </td>
                           <td className="text-end">{formatoPeso(item.precio)}</td><td className="text-end">{formatoPeso(item.precio * item.cantidad)}</td>
                         </tr>
