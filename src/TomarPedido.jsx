@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { db } from './firebase.js'; 
+import { db, auth } from './firebase.js'; 
 import { 
   collection, getDocs, addDoc, updateDoc, 
   doc, Timestamp, query, where, limit
@@ -16,12 +16,22 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
 
   const [menu, setMenu] = useState([]);
   
+  // Helper para obtener hora actual en formato HH:MM
+  const obtenerHoraActual = () => {
+    const ahora = new Date();
+    return ahora.toLocaleTimeString('es-CL', {hour: '2-digit', minute:'2-digit'});
+  };
+
   // Estados inicializados
   const [orden, setOrden] = useState(ordenAEditar ? ordenAEditar.items : []);
   const [numeroPedido, setNumeroPedido] = useState(ordenAEditar ? ordenAEditar.numero_pedido : 1); 
   const [tipoEntrega, setTipoEntrega] = useState(ordenAEditar ? (ordenAEditar.tipo_entrega || 'LOCAL') : 'LOCAL');
   
-  // --- RESTAURADO: Estado para Observaciones Generales ---
+  // NUEVOS ESTADOS: Nombre Cliente y Hora
+  const [nombreCliente, setNombreCliente] = useState(ordenAEditar ? (ordenAEditar.nombre_cliente || '') : '');
+  const [horaPedido, setHoraPedido] = useState(ordenAEditar ? (ordenAEditar.hora_pedido || '') : obtenerHoraActual());
+
+  // Estado para Observaciones Generales
   const [descripcion, setDescripcion] = useState(ordenAEditar ? (ordenAEditar.descripcion || '') : '');
   
   const [setMesa] = useState(ordenAEditar ? (ordenAEditar.mesa || '') : ''); 
@@ -41,6 +51,12 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
   const [observacionTemp, setObservacionTemp] = useState('');
 
   const componentRef = useRef(null);
+  
+  // --- MODO PRUEBA ---
+  const emailUsuario = auth.currentUser ? auth.currentUser.email : "";
+  const esPrueba = emailUsuario === "prueba@isakari.com";
+  const COL_CAJAS = esPrueba ? "cajas_pruebas" : "cajas";
+  const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
 
   const handlePrint = useReactToPrint({
     contentRef: componentRef, 
@@ -50,8 +66,10 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
           setOrden([]);
           setMesa(''); 
           setDescripcion('');
+          setNombreCliente(''); // Limpiar nombre
+          setHoraPedido(obtenerHoraActual()); // Resetear hora
           setTipoEntrega('LOCAL');
-          // Recargamos el folio buscando de nuevo al renderizar o incrementamos temporalmente
+          // Recalcular número de pedido si es necesario
           // setNumeroPedido(prev => prev + 1); 
           volverACategorias();
       } else {
@@ -65,10 +83,12 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
     const inicializarDatos = async () => {
       setCargando(true);
       try {
-        // 1. Cargar Menú y Verificar Caja en Paralelo
+        // 1. Cargar Menú (siempre el mismo) y Verificar Caja (dinámica)
         const promesaMenu = getDocs(collection(db, "menu"));
+        
+        // Usamos COL_CAJAS dinámico
         const qCaja = query(
-            collection(db, "cajas"),
+            collection(db, COL_CAJAS),
             where("estado", "==", "abierta"),
             limit(1)
         );
@@ -84,13 +104,14 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
         if (!cajaSnapshot.empty) {
             setCajaAbierta(true);
             
-            // Si es un pedido nuevo, calculamos el folio basado en la caja
+            // Si es un pedido nuevo, calculamos el folio basado en la caja y colección correcta
             if (!ordenAEditar) {
                 const cajaData = cajaSnapshot.docs[0].data();
                 const inicioTurnoTS = cajaData.fecha_apertura;
 
+                // Usamos COL_ORDENES dinámico
                 const qOrdenes = query(
-                  collection(db, "ordenes"),
+                  collection(db, COL_ORDENES),
                   where("fecha", ">=", inicioTurnoTS)
                 );
 
@@ -116,7 +137,7 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
     };
 
     inicializarDatos();
-  }, [ordenAEditar]); 
+  }, [ordenAEditar, COL_CAJAS, COL_ORDENES]); 
 
   // --- GUARDAR PEDIDO ---
   const enviarCocina = async (imprimir = false) => {
@@ -135,8 +156,8 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
 
     try {
         if (ordenAEditar) {
-            // ACTUALIZAR
-            const ordenRef = doc(db, "ordenes", ordenAEditar.id);
+            // ACTUALIZAR (Usamos COL_ORDENES dinámico)
+            const ordenRef = doc(db, COL_ORDENES, ordenAEditar.id);
             let nuevaMesa = ordenAEditar.mesa;
             if (ordenAEditar.tipo_entrega !== tipoEntrega) {
                 nuevaMesa = tipoEntrega === 'LOCAL' ? 'Local' : '';
@@ -147,12 +168,16 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                 total: totalCalculado,
                 tipo_entrega: tipoEntrega,
                 mesa: nuevaMesa,
-                descripcion: descripcion // Guardamos la observación general
+                descripcion: descripcion,
+                nombre_cliente: nombreCliente, // Guardamos nombre
+                hora_pedido: horaPedido,       // Guardamos hora
+                editado_por_id: auth.currentUser ? auth.currentUser.uid : "anonimo",
+                editado_por_email: emailUsuario
             });
             alert("¡Orden ACTUALIZADA!");
         } else {
-            // CREAR NUEVO
-            await addDoc(collection(db, "ordenes"), {
+            // CREAR NUEVO (Usamos COL_ORDENES dinámico)
+            await addDoc(collection(db, COL_ORDENES), {
                 numero_pedido: numeroPedido,
                 mesa: tipoEntrega === 'LOCAL' ? 'Local' : '', 
                 tipo_entrega: tipoEntrega,
@@ -160,9 +185,18 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                 total: totalCalculado,
                 estado: "pendiente",
                 fecha: Timestamp.now(),
-                descripcion: descripcion // Guardamos la observación general
+                descripcion: descripcion,
+                nombre_cliente: nombreCliente, // Guardamos nombre
+                hora_pedido: horaPedido,       // Guardamos hora
+                usuario_id: auth.currentUser ? auth.currentUser.uid : "anonimo",
+                usuario_email: emailUsuario
             });
-            alert("¡Orden CREADA!");
+
+            if (esPrueba) {
+                alert("🛠️ ¡Pedido de PRUEBA guardado! (No afectará la caja real)");
+            } else {
+                alert("¡Orden CREADA!");
+            }
         }
         
         if (imprimir) {
@@ -172,6 +206,8 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                 setOrden([]);
                 setMesa(''); 
                 setDescripcion('');
+                setNombreCliente(''); // Limpiar nombre
+                setHoraPedido(obtenerHoraActual()); // Resetear hora
                 setTipoEntrega('LOCAL');
                 volverACategorias();
              } else {
@@ -188,7 +224,15 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
   // --- HELPERS ---
   const formatoPeso = (valor) => valor.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
   const categoriasUnicas = [...new Set(menu.map(item => item.categoria))];
-  const productosFiltrados = menu.filter(item => item.categoria === categoriaActual);
+  
+  // ===========================================================================
+  // AQUÍ ESTÁ EL CAMBIO: Agregamos .sort() para ordenar por precio (menor a mayor)
+  // Esto hará que salgan en orden: 20 cortes, 30 cortes, 40 cortes...
+  // ===========================================================================
+  const productosFiltrados = menu
+    .filter(item => item.categoria === categoriaActual)
+    .sort((a, b) => a.precio - b.precio);
+
   const abrirCategoria = (cat) => { setCategoriaActual(cat); setVista('PRODUCTOS'); };
   const volverACategorias = () => { setVista('CATEGORIAS'); setCategoriaActual(''); };
 
@@ -269,6 +313,7 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                   <div className="p-5 bg-secondary text-white rounded shadow" style={{border: '4px solid #dc3545', maxWidth: '80%'}}>
                     <i className="bi bi-door-closed-fill display-1 mb-3 text-danger"></i>
                     <h1 className="fw-bold display-5">CAJA NO INICIADA</h1>
+                    {esPrueba && <span className="badge bg-danger mb-3">MODO PRUEBA</span>}
                     <p className="lead mt-3">Para comenzar a tomar pedidos, primero debes iniciar el turno.</p>
                     <hr className="my-4" />
                     <p className="fw-bold text-warning fs-5">
@@ -290,7 +335,10 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                 {/* --- VISTA NORMAL DEL MENÚ --- */}
                 {vista === 'CATEGORIAS' ? (
                     <div className="h-100 d-flex flex-column">
-                    <h2 className="text-white mb-4 text-center">Seleccione Categoría</h2>
+                    <h2 className="text-white mb-4 text-center">
+                        Seleccione Categoría 
+                        {esPrueba && <span className="badge bg-danger ms-2 fs-6">MODO PRUEBA</span>}
+                    </h2>
                     <div className="grid-5x5 flex-grow-1 overflow-auto">
                         {categoriasUnicas.map(cat => (
                         <button key={cat} className="btn btn-outline-light btn-categoria-grande" onClick={() => abrirCategoria(cat)}>
@@ -377,8 +425,18 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                           <span className="fw-bold d-block">{item.nombre}</span>
                           
                           {item.descripcion_producto && (
-                              <small className="text-muted d-block fst-italic" style={{fontSize: '0.75rem'}}>{item.descripcion_producto}</small>
-                          )}
+                                <small className="text-muted d-block fst-italic" style={{fontSize: '0.75rem'}}>
+                                    {/* Verificamos si es un Array (lista) o texto normal */}
+                                    {Array.isArray(item.descripcion_producto) 
+                                        ? item.descripcion_producto.map((linea, index) => (
+                                            <span key={index} className="d-block">
+                                                • {linea}
+                                            </span>
+                                            ))
+                                        : item.descripcion_producto /* Caso fallback si sigue siendo string */
+                                    }
+                                </small>
+                            )}
                            <small className="text-muted">{formatoPeso(item.precio)} c/u</small>
                       </div>
                       <div className="text-end">
@@ -440,19 +498,37 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
 
           <div className="p-3 bg-light border-top shadow-sm">
             
-            {/* --- RESTAURADO: CAMPO DE OBSERVACIONES GENERALES --- */}
+            {/* NUEVOS CAMPOS: NOMBRE Y HORA */}
+            <div className="d-flex gap-2 mb-2">
+                <input 
+                    type="text" 
+                    className="form-control fw-bold" 
+                    placeholder="Nombre Cliente" 
+                    value={nombreCliente} 
+                    onChange={(e) => setNombreCliente(e.target.value)}
+                    disabled={!cajaAbierta && !ordenAEditar}
+                />
+                <input 
+                    type="time" 
+                    className="form-control text-center" 
+                    style={{width: '160px'}}
+                    value={horaPedido} 
+                    onChange={(e) => setHoraPedido(e.target.value)}
+                    disabled={!cajaAbierta && !ordenAEditar}
+                    title="Hora de entrega/retiro"
+                />
+            </div>
+
             <div className="mb-3">
-                <label className="form-label fw-bold text-muted small">OBSERVACIONES GENERALES:</label>
                 <textarea 
                     className="form-control" 
                     rows="2" 
-                    placeholder="Ej: Envolver todo junto..."
+                    placeholder="Observaciones generales (Ej: Envolver todo junto...)"
                     value={descripcion}
                     onChange={(e) => setDescripcion(e.target.value)}
                     disabled={!cajaAbierta && !ordenAEditar}
                 ></textarea>
             </div>
-            {/* ----------------------------------------------------- */}
 
             <div className="d-flex justify-content-between mb-3">
               <span className="h3 text-dark">Total</span>
@@ -505,6 +581,8 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
                                 tipoEntrega={tipoEntrega}
                                 fecha={fechaHora || new Date().toLocaleDateString()} 
                                 descripcion={descripcion}
+                                cliente={nombreCliente} 
+                                hora={horaPedido}       
                              />
                           </div>
                       </div>
@@ -526,6 +604,8 @@ export const TomarPedido = ({ ordenAEditar, onTerminarEdicion }) => {
             tipoEntrega={tipoEntrega}
             fecha={fechaHora}
             descripcion={descripcion}
+            cliente={nombreCliente} 
+            hora={horaPedido}       
             />
         </div>
       </div>

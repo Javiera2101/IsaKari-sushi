@@ -10,7 +10,13 @@ import { Ticket } from './Ticket.jsx';
 // --- NUEVAS IMPORTACIONES PARA EL CALENDARIO ---
 import DatePicker, { registerLocale } from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-import { es } from 'date-fns/locale/es'; 
+
+// CORRECCIÓN: Importamos 'es' sin llaves (exportación por defecto)
+import es from 'date-fns/locale/es'; 
+
+// --- IMPORTACIONES PARA PDF ---
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 registerLocale('es', es);
 
@@ -83,6 +89,11 @@ export const Caja = ({ user }) => {
   const reportRef = useRef(null);
   const ticketRef = useRef(null); 
 
+  // --- MODO PRUEBA: Definir colecciones dinámicas ---
+  const esPrueba = user && user.email === "prueba@isakari.com";
+  const COL_CAJAS = esPrueba ? "cajas_pruebas" : "cajas";
+  const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
+
   const handlePrintReport = useReactToPrint({
     contentRef: reportRef,
     content: () => reportRef.current,
@@ -95,7 +106,98 @@ export const Caja = ({ user }) => {
       documentTitle: `Ticket_Reimpresion`
   });
 
-  const formatoPeso = (valor) => valor.toLocaleString('es-CL', {style: 'currency', currency: 'CLP'});
+  // --- FUNCIÓN PARA EXPORTAR A PDF ---
+  const exportarPDF = () => {
+    const doc = new jsPDF();
+    const fechaStr = fechaSeleccionada.toLocaleDateString('es-CL');
+    
+    // Título y Encabezado
+    doc.setFontSize(18);
+    doc.text(`Reporte Cierre de Caja`, 14, 20);
+    doc.setFontSize(12);
+    doc.text(`Fecha: ${fechaStr}`, 14, 28);
+    if(cajaActiva && cajaActiva.email_usuario){
+        doc.text(`Cajero: ${cajaActiva.email_usuario}`, 14, 34);
+    }
+
+    // Sección Resumen
+    doc.setDrawColor(0);
+    doc.setFillColor(240, 240, 240);
+    doc.rect(14, 40, 180, 35, 'F');
+    
+    doc.setFontSize(11);
+    doc.text(`Ventas Totales:`, 20, 50);
+    doc.setFont("helvetica", "bold");
+    doc.text(formatoPeso(totales.totalVentas), 60, 50);
+    
+    doc.setFont("helvetica", "normal");
+    doc.text(`Fondo Inicial:`, 20, 58);
+    doc.text(formatoPeso(fondoCajaDisplay), 60, 58);
+
+    doc.text(`Total Efectivo en Caja:`, 20, 66);
+    doc.setFont("helvetica", "bold");
+    doc.text(formatoPeso(totalEfectivoCalculado), 70, 66);
+
+    // Tabla de Desglose de Medios
+    const mediosData = [
+        ['Efectivo', formatoPeso(totales.efectivo)],
+        ['Débito', formatoPeso(totales.debito)],
+        ['Transferencia', formatoPeso(totales.transferencia)],
+        ['Junaeb (Edenred)', formatoPeso(totales.edenred)],
+    ];
+
+    autoTable(doc, {
+        startY: 80,
+        head: [['Medio de Pago', 'Monto Acumulado']],
+        body: mediosData,
+        theme: 'grid',
+        headStyles: { fillColor: [50, 50, 50] },
+        styles: { fontSize: 10 },
+        columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } },
+        margin: { left: 14, right: 100 }
+    });
+
+    // Tabla Detalle de Ventas
+    const finalY = doc.lastAutoTable.finalY + 15;
+    doc.setFontSize(14);
+    doc.text("Detalle de Ventas del Turno", 14, finalY);
+
+    const columnasVentas = ["Hora", "N°", "Cliente/Mesa", "Tipo", "Método", "Total", "Estado"];
+    const filasVentas = ventasDia.map(v => [
+        v.fecha_cierre ? new Date(v.fecha_cierre.seconds * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '-',
+        `#${v.numero_pedido}`,
+        v.nombre_cliente ? `${v.nombre_cliente.toUpperCase()} (Mesa ${v.mesa})` : (v.tipo_entrega === 'REPARTO' ? 'Reparto' : `Mesa ${v.mesa}`),
+        v.tipo_entrega,
+        v.metodo_pago,
+        formatoPeso(v.total_final || v.total),
+        v.estado === 'cancelado' ? 'ANULADO' : 'Pagado'
+    ]);
+
+    autoTable(doc, {
+        startY: finalY + 5,
+        head: [columnasVentas],
+        body: filasVentas,
+        theme: 'striped',
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [22, 160, 133] },
+        alternateRowStyles: { fillColor: [240, 255, 250] },
+        didParseCell: function(data) {
+            if (data.row.raw[6] === 'ANULADO') {
+                data.cell.styles.textColor = [255, 0, 0]; // Rojo para anulados
+                data.cell.styles.fontStyle = 'bold';
+            }
+        }
+    });
+
+    // Guardar PDF
+    doc.save(`Cierre_Caja_${fechaStr}.pdf`);
+  };
+
+  // --- CORRECCIÓN DEL FORMATO PESO (SOLUCIÓN AL ERROR) ---
+  const formatoPeso = (valor) => {
+      if (valor === undefined || valor === null || isNaN(valor)) return '$0';
+      return valor.toLocaleString('es-CL', {style: 'currency', currency: 'CLP'});
+  };
 
   const handleFondoChange = (e) => {
       const rawValue = e.target.value.replace(/[^0-9]/g, '');
@@ -110,8 +212,6 @@ export const Caja = ({ user }) => {
         setTempMetodo(ventaSeleccionada.metodo_pago);
         
         // Inicializar descuento temporal
-        // Si ya tenía descuento, lo usamos. Si no, 0.
-        // Convertimos a string para el input si es necesario, o mantenemos número.
         setTempDescuento(ventaSeleccionada.descuento_porcentaje || 0);
 
         if (ventaSeleccionada.desglose_pago) {
@@ -126,7 +226,6 @@ export const Caja = ({ user }) => {
   }, [ventaSeleccionada]);
 
   // CÁLCULO DINÁMICO DEL TOTAL AL EDITAR
-  // Usamos el 'total_original' si existe (el precio sin descuento), sino el 'total' base
   const totalBase = ventaSeleccionada ? (ventaSeleccionada.total_original || ventaSeleccionada.total) : 0;
   
   // Calculamos el descuento en base al porcentaje temporal
@@ -186,17 +285,17 @@ export const Caja = ({ user }) => {
           }
       } else {
           datosPago = null; 
-          // Si es un solo método, no guardamos desglose, pero el total_final se actualiza abajo
       }
 
       try {
-          const ref = doc(db, "ordenes", ventaSeleccionada.id);
+          // IMPORTANTE: Usamos COL_ORDENES dinámico
+          const ref = doc(db, COL_ORDENES, ventaSeleccionada.id);
           await updateDoc(ref, {
               metodo_pago: metodoFinal,
               desglose_pago: datosPago,
-              descuento_porcentaje: tempDescuento, // Guardamos el nuevo descuento
-              total_final: totalFinalCalculado,    // Guardamos el nuevo total
-              total_original: totalBase            // Aseguramos que se mantenga el base
+              descuento_porcentaje: tempDescuento, 
+              total_final: totalFinalCalculado,    
+              total_original: totalBase            
           });
           alert("✅ Pago y descuento actualizados correctamente.");
           setVentaSeleccionada(null);
@@ -256,8 +355,9 @@ export const Caja = ({ user }) => {
         let cajaEncontrada = null;
         
         if (isToday(fechaSeleccionada)) {
+            // Usamos COL_CAJAS dinámico
             const qAbierta = query(
-                collection(db, "cajas"),
+                collection(db, COL_CAJAS),
                 where("estado", "==", "abierta"),
                 limit(1)
             );
@@ -269,8 +369,9 @@ export const Caja = ({ user }) => {
         }
 
         if (!cajaEncontrada) {
+            // Usamos COL_CAJAS dinámico
             const qCerrada = query(
-                collection(db, "cajas"),
+                collection(db, COL_CAJAS),
                 where("fecha_apertura", ">=", inicioDiaTS),
                 where("fecha_apertura", "<", finDiaTS),
                 orderBy("fecha_apertura", "desc"), 
@@ -310,8 +411,9 @@ export const Caja = ({ user }) => {
             }
         }
 
+        // Usamos COL_ORDENES dinámico
         const qVentas = query(
-            collection(db, "ordenes"),
+            collection(db, COL_ORDENES),
             where("fecha", ">=", inicioVentas),
             where("fecha", "<", finVentas),
             where("estado", "in", ["pagado", "cancelado"])
@@ -320,11 +422,8 @@ export const Caja = ({ user }) => {
         const ventasSnapshot = await getDocs(qVentas); 
         const listaVentas = ventasSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
-        listaVentas.sort((a, b) => {
-            const fA = a.fecha_cierre || a.fecha_cancelacion || a.fecha;
-            const fB = b.fecha_cierre || b.fecha_cancelacion || b.fecha;
-            return fB - fA;
-        });
+        // Ordenar por número de pedido ASCENDENTE (1, 2, 3...)
+        listaVentas.sort((a, b) => a.numero_pedido - b.numero_pedido);
         
         setVentasDia(listaVentas);
         calcularTotales(listaVentas);
@@ -345,14 +444,21 @@ export const Caja = ({ user }) => {
     
     setCargando(true);
     try {
-        await addDoc(collection(db, "cajas"), {
+        // Usamos COL_CAJAS dinámico
+        await addDoc(collection(db, COL_CAJAS), {
             fondo_inicial: fondoInicialInput,
             fecha_apertura: Timestamp.now(),
             estado: "abierta",
             id_usuario: user.uid,
             email_usuario: user.email 
         });
-        alert(`✅ Caja iniciada con ${formatoPeso(fondoInicialInput)} por ${user.email}`);
+        
+        if(esPrueba) {
+            alert(`🛠️ Caja de PRUEBAS iniciada con ${formatoPeso(fondoInicialInput)}`);
+        } else {
+            alert(`✅ Caja iniciada con ${formatoPeso(fondoInicialInput)} por ${user.email}`);
+        }
+        
         setVistaApertura(false); 
         await cargarDatosDelDia();
     } catch (e) {
@@ -366,7 +472,8 @@ export const Caja = ({ user }) => {
     if (!cajaActiva) return alert("No hay caja abierta para cerrar");
 
     try {
-        const qPendientes = query(collection(db, "ordenes"), where("estado", "==", "pendiente"));
+        // Usamos COL_ORDENES dinámico
+        const qPendientes = query(collection(db, COL_ORDENES), where("estado", "==", "pendiente"));
         const snapshotPendientes = await getDocs(qPendientes);
 
         if (!snapshotPendientes.empty) {
@@ -384,7 +491,8 @@ export const Caja = ({ user }) => {
     if (confirmacion) {
         setCargando(true);
         try {
-            const ref = doc(db, "cajas", cajaActiva.id);
+            // Usamos COL_CAJAS dinámico
+            const ref = doc(db, COL_CAJAS, cajaActiva.id);
             await updateDoc(ref, {
                 estado: "cerrada",
                 fecha_cierre: Timestamp.now(),
@@ -410,7 +518,7 @@ export const Caja = ({ user }) => {
 
   useEffect(() => {
     cargarDatosDelDia();
-  }, [fechaSeleccionada, user]);
+  }, [fechaSeleccionada, user]); // Agregado 'user' a dependencias
 
   const handleDateChange = (dateString) => {
       if (!dateString) { setFechaSeleccionada(new Date()); return; }
@@ -449,6 +557,8 @@ export const Caja = ({ user }) => {
                   />
                   <h2 className="mb-4 fw-bold">Iniciar Nuevo Turno</h2>
                   
+                  {esPrueba && <div className="badge bg-danger mb-3 p-2">MODO PRUEBA ACTIVO</div>}
+
                   {cajaActiva && (
                       <div className="alert alert-info small mb-3">
                           Ya existe un turno cerrado hoy. Al iniciar uno nuevo, el folio de pedidos se reiniciará.
@@ -486,6 +596,7 @@ export const Caja = ({ user }) => {
       return (
           <div className="container-fluid h-100 bg-light p-5 text-center">
               <h2 className="fw-bold text-dark"><i className="bi bi-bar-chart me-2"></i>Cierre de Caja</h2>
+              {esPrueba && <span className="badge bg-danger mb-3">MODO PRUEBA</span>}
               <div className="d-flex align-items-center justify-content-center gap-2 mt-2 mb-5">
                   <h5 className="text-muted m-0">Fecha:</h5>
                   <div className="custom-datepicker-wrapper">
@@ -511,7 +622,10 @@ export const Caja = ({ user }) => {
       
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
-            <h2 className="fw-bold text-dark"><i className="bi bi-bar-chart me-2"></i>Cierre de Caja</h2>
+            <h2 className="fw-bold text-dark">
+                <i className="bi bi-bar-chart me-2"></i>Cierre de Caja
+                {esPrueba && <span className="badge bg-danger ms-3 fs-6">MODO PRUEBA</span>}
+            </h2>
             <div className="d-flex align-items-center gap-2 mt-2">
                 <h5 className="text-muted m-0">Fecha:</h5>
                  <div className="custom-datepicker-wrapper">
@@ -555,6 +669,9 @@ export const Caja = ({ user }) => {
                     <i className="bi bi-lock-fill me-2"></i>CERRAR TURNO
                 </button>
             )}
+            <button className="btn btn-success btn-lg shadow" onClick={exportarPDF}>
+                <i className="bi bi-file-earmark-pdf-fill me-2"></i>EXPORTAR PDF
+            </button>
             <button className="btn btn-dark btn-lg shadow" onClick={handlePrintReport}>
                 <i className="bi bi-printer me-2"></i>IMPRIMIR CIERRE
             </button>
@@ -620,7 +737,7 @@ export const Caja = ({ user }) => {
               <table className="table table-hover mb-0 align-middle">
                   <thead className="table-light">
                       <tr>
-                          <th>Hora</th><th>N°</th><th>Tipo</th><th className="text-end">Total</th><th className="text-center">Estado</th><th className="text-center">Detalle</th>
+                          <th>Hora</th><th>N° Pedido</th><th>Tipo</th><th className="text-end">Total</th><th className="text-center">Estado</th><th className="text-center">Detalle</th>
                       </tr>
                   </thead>
                   <tbody>
@@ -633,7 +750,13 @@ export const Caja = ({ user }) => {
                               ventasDia.map(v => (
                                 <tr key={v.id} className={v.estado === 'cancelado' ? 'table-danger' : ''}>
                                     <td>{v.fecha_cierre ? new Date(v.fecha_cierre.seconds * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '-'}</td>
-                                    <td><span className="badge bg-dark">#{v.numero_pedido}</span></td>
+                                    <td>
+                                        <div className="d-flex flex-column">
+                                            <span className="badge bg-dark fs-6 w-auto align-self-start">#{v.numero_pedido}</span>
+                                            {/* AGREGADO: Nombre Cliente en la tabla */}
+                                            {v.nombre_cliente && <small className="fw-bold text-primary text-uppercase mt-1" style={{fontSize: '0.75rem'}}>{v.nombre_cliente}</small>}
+                                        </div>
+                                    </td>
                                     <td>
                                         {v.tipo_entrega === 'REPARTO' 
                                             ? <span className={`badge ${v.estado==='cancelado'?'bg-danger':'bg-warning text-dark'}`}><i className="bi bi-car-front-fill me-1"></i>REPARTO</span> 
@@ -674,12 +797,26 @@ export const Caja = ({ user }) => {
               <div className="modal-body">
                 {!editandoPago && (
                     <>
-                        <h5 className="mb-3 text-center">
-                            {ventaSeleccionada.tipo_entrega === 'REPARTO' 
-                                ? <><i className="bi bi-car-front-fill me-2"></i>Reparto</> 
-                                : <><i className="bi bi-shop-window me-2"></i>Mesa {ventaSeleccionada.mesa}</>
-                            }
-                        </h5>
+                        {/* --- ENCABEZADO MEJORADO CON NOMBRE Y HORA --- */}
+                        <div className="text-center mb-3">
+                            <h4 className="fw-bold text-uppercase mb-1">
+                                {ventaSeleccionada.nombre_cliente || (ventaSeleccionada.tipo_entrega === 'REPARTO' ? 'Reparto' : `Mesa ${ventaSeleccionada.mesa}`)}
+                            </h4>
+                            <div className="text-muted d-flex justify-content-center align-items-center gap-3">
+                                {ventaSeleccionada.nombre_cliente && (
+                                    <span>
+                                        {ventaSeleccionada.tipo_entrega === 'REPARTO' 
+                                            ? <><i className="bi bi-car-front-fill me-1"></i>Reparto</> 
+                                            : <><i className="bi bi-shop-window me-1"></i>Mesa {ventaSeleccionada.mesa}</>
+                                        }
+                                    </span>
+                                )}
+                                {ventaSeleccionada.hora_pedido && (
+                                    <span className="fw-bold text-dark"><i className="bi bi-clock me-1"></i>{ventaSeleccionada.hora_pedido}</span>
+                                )}
+                            </div>
+                        </div>
+                        {/* ------------------------------------------- */}
 
                         <div className="card mb-3">
                             <ul className="list-group list-group-flush">
@@ -802,7 +939,7 @@ export const Caja = ({ user }) => {
                                     // Resetear pagos para obligar a recalcular
                                     setTempPagos({ efectivo: 0, debito: 0, transferencia: 0, edenred: 0 });
                                 }}
-                             />
+                            />
                          </div>
                          {/* ---------------------------------------- */}
 
@@ -812,11 +949,11 @@ export const Caja = ({ user }) => {
                                 return (
                                 <div className="col" key={metodo}>
                                     <button 
-                                        className={`btn w-100 py-3 fw-bold ${tempMetodo === metodo ? 'btn-dark border-3 border-'+info.color : 'btn-outline-secondary'}`} 
-                                        onClick={() => {setTempMetodo(metodo); if(metodo === 'MIXTO') setTempMixtosActivos([]);}}
+                                            className={`btn w-100 py-3 fw-bold ${tempMetodo === metodo ? 'btn-dark border-3 border-'+info.color : 'btn-outline-secondary'}`} 
+                                            onClick={() => {setTempMetodo(metodo); if(metodo === 'MIXTO') setTempMixtosActivos([]);}}
                                     >
-                                        <i className={`bi ${info.icon} fs-3 d-block mb-1 text-${tempMetodo === metodo ? 'white' : info.color}`}></i>
-                                        {metodo}
+                                            <i className={`bi ${info.icon} fs-3 d-block mb-1 text-${tempMetodo === metodo ? 'white' : info.color}`}></i>
+                                            {metodo}
                                     </button>
                                 </div>
                             )})}
@@ -900,6 +1037,9 @@ export const Caja = ({ user }) => {
                       logoUrl={LOGO_URL} 
                       fecha={ventaSeleccionada.fecha ? new Date(ventaSeleccionada.fecha.seconds * 1000).toLocaleDateString('es-CL') + ' ' + new Date(ventaSeleccionada.fecha.seconds * 1000).toLocaleTimeString('es-CL', {hour: '2-digit', minute:'2-digit'}) : ''}
                       descripcion={ventaSeleccionada.descripcion}
+                      // --- NUEVOS PROPS PARA REIMPRESIÓN ---
+                      cliente={ventaSeleccionada.nombre_cliente}
+                      hora={ventaSeleccionada.hora_pedido}
                   />
               </div>
           )}

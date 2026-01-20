@@ -3,7 +3,7 @@ import './css/Ticket.css';
 // IMPORTAMOS EL LOGO
 import logoIsakari from './images/logoBK.png';
 
-export const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, descripcion, logoUrl }) => {
+export const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, descripcion, logoUrl, cliente, hora }) => {
   
   const formatoPeso = (valor) => {
     return valor.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
@@ -33,6 +33,11 @@ export const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, descrip
         <p className="m-0 mb-2 fw-bold">+56 9 813 51797</p>   
         
         <h3 className="fw-bold mt-2">Mesa {numeroPedido}</h3>
+
+        {/* --- NUEVO: NOMBRE CLIENTE Y HORA --- */}
+        {cliente && <p className="m-0 fw-bold fs-5 text-uppercase">{cliente}</p>}
+        {hora && <p className="m-0 fw-bold">Hora: {hora}</p>}
+        {/* ------------------------------------ */}
         
         <div className="linea-punteada"></div>
         <div className="d-flex justify-content-between fw-bold">
@@ -58,13 +63,24 @@ export const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, descrip
                     {item.cantidad} x {item.nombre}
                   </span>
                   
-                  {/* DESCRIPCIÓN DEL PRODUCTO (Base de datos) */}
                   {item.descripcion_producto && (
-                    <div style={{ fontSize: '0.8em', color: '#555', fontStyle: 'italic', lineHeight: '1.1', marginBottom: '2px' }}>
-                        {item.descripcion_producto}
-                    </div>
+                      <div style={{ fontSize: '0.8em', color: '#555', fontStyle: 'italic', lineHeight: '1.1', marginBottom: '2px' }}>
+                          {/* Lógica para detectar si es Array o Texto con Enter */}
+                          {Array.isArray(item.descripcion_producto) ? (
+                              // CASO A: Es una lista (Array) de Firebase
+                              item.descripcion_producto.map((linea, idx) => (
+                                  <span key={idx} style={{ display: 'block' }}>
+                                    - {linea}
+                                  </span>
+                              ))
+                          ) : (
+                              // CASO B: Es texto simple (String). Usamos pre-wrap para que lea los \n
+                              <span style={{ whiteSpace: 'pre-wrap' }}>
+                                  {item.descripcion_producto}
+                              </span>
+                          )}
+                      </div>
                   )}
-
                   {/* PRECIO UNITARIO */}
                   <small className="d-block text-muted" style={{ fontSize: '0.85em' }}>
                     {formatoPeso(item.precio)} c/u

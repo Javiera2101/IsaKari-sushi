@@ -1,3 +1,10 @@
+const fs = require('fs');
+const path = require('path');
+
+// Contenido correcto que usa require
+const codigoCorrecto = `/* eslint-env node */
+/* global require, process, __dirname */
+
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 
@@ -10,6 +17,7 @@ function createWindow() {
       contextIsolation: false // Para facilitar la integración simple
     },
     // Asegúrate de tener un icono en esta ruta para la ventana
+    // Si no existe la imagen, no pasa nada, solo no se mostrará el icono
     icon: path.join(__dirname, 'src/images/logo.png') 
   });
 
@@ -41,3 +49,15 @@ app.on('activate', () => {
     createWindow();
   }
 });
+`;
+
+const rutaArchivo = path.join(__dirname, 'main.js');
+
+try {
+    console.log(`Intentando sobrescribir: ${rutaArchivo}`);
+    fs.writeFileSync(rutaArchivo, codigoCorrecto, 'utf8');
+    console.log('✅ ¡EXITO! main.js ha sido corregido forzosamente.');
+    console.log('👉 Ahora ejecuta: npm start');
+} catch (error) {
+    console.error('❌ Error al escribir el archivo:', error);
+}

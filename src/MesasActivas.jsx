@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { db } from './firebase';
+import { db, auth } from './firebase'; 
 import { collection, query, where, onSnapshot, doc, updateDoc, Timestamp } from 'firebase/firestore';
 import './css/bootstrap.min.css';
 
@@ -11,30 +11,37 @@ export const MesasActivas = ({ onEditar }) => {
   const [metodoPago, setMetodoPago] = useState('EFECTIVO'); 
   const [mediosMixtosActivos, setMediosMixtosActivos] = useState([]);
 
-  // Estado para el descuento (ahora puede ser string vacío para facilitar edición)
+  // Estado para el descuento
   const [descuento, setDescuento] = useState(0); 
 
   const [pagos, setPagos] = useState({
     efectivo: 0, debito: 0, transferencia: 0, edenred: 0
   });
 
+  // --- LÓGICA MODO PRUEBA ---
+  const emailUsuario = auth.currentUser ? auth.currentUser.email : "";
+  const esPrueba = emailUsuario === "prueba@isakari.com";
+  const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
+
   // Diccionario de Iconos y Colores
-    const configMedios = {
+  const configMedios = {
     'EFECTIVO':      { icon: 'bi-cash-stack', color: 'success' }, 
     'DEBITO':        { icon: 'bi-credit-card-2-front', color: 'primary' }, 
     'TRANSFERENCIA': { icon: 'bi-bank', color: 'info' }, 
     'EDENRED':       { icon: 'bi-ticket-perforated', color: 'warning' }, 
     'MIXTO':         { icon: 'bi-collection', color: 'secondary' } 
-    };
+  };
 
   useEffect(() => {
-    const q = query(collection(db, "ordenes"), where("estado", "==", "pendiente"));
+    // Usamos COL_ORDENES dinámico aquí
+    const q = query(collection(db, COL_ORDENES), where("estado", "==", "pendiente"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const lista = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Ordenar por fecha (más antiguo primero)
       setPedidos(lista.sort((a, b) => a.fecha - b.fecha));
     });
     return () => unsubscribe();
-  }, []);
+  }, [COL_ORDENES]); 
 
   const formatoPeso = (valor) => valor.toLocaleString('es-CL', {style: 'currency', currency: 'CLP'});
   const calcularTotalOriginal = (items) => items.reduce((acc, item) => acc + (item.precio * item.cantidad), 0);
@@ -49,12 +56,14 @@ export const MesasActivas = ({ onEditar }) => {
 
     if (confirmacion) {
       try {
-        const ordenRef = doc(db, "ordenes", pedidoSeleccionado.id);
+        const ordenRef = doc(db, COL_ORDENES, pedidoSeleccionado.id);
         await updateDoc(ordenRef, {
             estado: "cancelado",
-            fecha_cancelacion: Timestamp.now()
+            fecha_cancelacion: Timestamp.now(),
+            anulado_por: emailUsuario
         });
         setPedidoSeleccionado(null);
+        if(esPrueba) alert("🛠️ Pedido de prueba anulado");
       } catch (e) {
         console.error("Error al anular:", e);
         alert("No se pudo anular el pedido.");
@@ -66,7 +75,6 @@ export const MesasActivas = ({ onEditar }) => {
   const obtenerTotalConDescuento = () => {
       if (!pedidoSeleccionado) return 0;
       const totalOriginal = calcularTotalOriginal(pedidoSeleccionado.items);
-      // Convertimos descuento a número para el cálculo, si es vacío lo tratamos como 0
       const descNum = parseInt(descuento) || 0;
       const montoDescuento = Math.round(totalOriginal * (descNum / 100));
       return totalOriginal - montoDescuento;
@@ -133,8 +141,7 @@ export const MesasActivas = ({ onEditar }) => {
     }
 
     try {
-      const ordenRef = doc(db, "ordenes", pedidoSeleccionado.id);
-      // Aseguramos guardar el descuento como número
+      const ordenRef = doc(db, COL_ORDENES, pedidoSeleccionado.id);
       const descFinal = parseInt(descuento) || 0;
 
       await updateDoc(ordenRef, {
@@ -144,7 +151,8 @@ export const MesasActivas = ({ onEditar }) => {
         desglose_pago: datosPago,
         total_original: totalOriginal, 
         descuento_porcentaje: descFinal, 
-        total_final: totalPagar 
+        total_final: totalPagar,
+        cobrado_por: emailUsuario
       });
       
       setMostrandoPago(false);
@@ -152,18 +160,20 @@ export const MesasActivas = ({ onEditar }) => {
       setPagos({ efectivo: 0, debito: 0, transferencia: 0, edenred: 0 });
       setMediosMixtosActivos([]);
       setDescuento(0);
+      
+      if(esPrueba) alert("🛠️ Pago de prueba registrado exitosamente");
+
     } catch (e) {
       console.error(e);
       alert("Error al cerrar mesa");
     }
   };
 
-  // LISTENER GLOBAL PARA ENTER EN PAGOS SIMPLES
+  // LISTENER GLOBAL PARA ENTER
   useEffect(() => {
     const handleGlobalEnter = (e) => {
         if (mostrandoPago && e.key === 'Enter') {
             if (document.activeElement.tagName === 'INPUT') return;
-            
             if (metodoPago !== 'MIXTO') {
                 e.preventDefault();
                 procesarPago();
@@ -181,7 +191,6 @@ export const MesasActivas = ({ onEditar }) => {
       { key: 'edenred', label: 'Junaeb' }
   ];
   
-  // Valores calculados
   const totalOriginal = pedidoSeleccionado ? calcularTotalOriginal(pedidoSeleccionado.items) : 0;
   const descNum = parseInt(descuento) || 0;
   const montoDescuento = pedidoSeleccionado ? Math.round(totalOriginal * (descNum / 100)) : 0;
@@ -190,9 +199,8 @@ export const MesasActivas = ({ onEditar }) => {
   const totalActual = pagos.efectivo + pagos.debito + pagos.transferencia + pagos.edenred;
   const faltaPorCubrir = totalPagar - totalActual;
 
-  // FUNCIÓN PARA ABRIR EL MODAL Y RESETEAR VALORES
   const abrirModalPago = () => {
-      setDescuento(''); // Iniciar vacío para que se vea el placeholder o 0 limpio
+      setDescuento(''); 
       setPagos({ efectivo: 0, debito: 0, transferencia: 0, edenred: 0 });
       setMetodoPago('EFECTIVO');
       setMediosMixtosActivos([]);
@@ -205,17 +213,60 @@ export const MesasActivas = ({ onEditar }) => {
         
         {/* COLUMNA IZQUIERDA */}
         <div className="col-4 border-end h-100 overflow-auto p-0 bg-white">
+          <div className="p-3 bg-dark text-white d-flex justify-content-between align-items-center sticky-top">
+              <h5 className="m-0 fw-bold">Pedidos Pendientes</h5>
+              {esPrueba && <span className="badge bg-danger">MODO PRUEBA</span>}
+          </div>
+          
           <div className="list-group list-group-flush">
-            {pedidos.map(p => (
-              <button key={p.id} className={`list-group-item list-group-item-action py-3 ${pedidoSeleccionado?.id === p.id ? 'active' : ''}`} onClick={() => setPedidoSeleccionado(p)}>
-                <div className="d-flex w-100 justify-content-between">
-                  <h5 className="mb-1">Mesa {p.numero_pedido || '?'} {p.tipo_entrega === 'REPARTO' && <i className="bi bi-car-front-fill"></i>} {p.tipo_entrega === 'LOCAL' && <i className="bi bi-shop-window fs-4 me-2"></i>}</h5>
-                  <small>{p.fecha ? new Date(p.fecha.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</small>
+            {pedidos.length === 0 && (
+                <div className="text-center p-4 text-muted">
+                    No hay mesas ni pedidos pendientes.
                 </div>
-                <p className="mb-1">{p.tipo_entrega}</p>
-                <small className="fw-bold fs-6">{formatoPeso(p.total)}</small>
-              </button>
-            ))}
+            )}
+            {pedidos.map(p => {
+              // Determinamos si este elemento está seleccionado para usarlo en los estilos
+              const esSeleccionado = pedidoSeleccionado?.id === p.id;
+
+              return (
+                <button key={p.id} className={`list-group-item list-group-item-action py-3 ${esSeleccionado ? 'active' : ''}`} onClick={() => setPedidoSeleccionado(p)}>
+                  <div className="d-flex w-100 justify-content-between">
+                    <h5 className="mb-1 text-truncate">
+                        {/* MOSTRAR EL NÚMERO DE PEDIDO AQUI */}
+                        {/* Si está seleccionado, ponemos el badge blanco para contraste */}
+                        <span className={`badge ${esSeleccionado ? 'bg-white text-dark' : 'bg-dark'} me-2`}>#{p.numero_pedido}</span>
+                        
+                        {/* LÓGICA PARA MOSTRAR NOMBRE O MESA */}
+                        {p.nombre_cliente ? (
+                          // AQUÍ EL CAMBIO: Si está seleccionado usamos 'text-white', si no 'text-primary'
+                          <span className={`fw-bold text-uppercase ${esSeleccionado ? 'text-white' : 'text-primary'}`}>{p.nombre_cliente}</span>
+                        ) : (
+                          <span>Mesa {p.mesa || '?'}</span>
+                        )}
+                    </h5>
+                    <small className="fw-bold">
+                      {/* PRIORIZAR HORA MANUAL, SINO FECHA */}
+                      {p.hora_pedido || (p.fecha ? new Date(p.fecha.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '')}
+                    </small>
+                  </div>
+                  
+                  <div className="d-flex justify-content-between align-items-center mt-1">
+                      <div>
+                          <span className={`badge ${p.tipo_entrega === 'REPARTO' ? 'bg-warning text-dark' : (esSeleccionado ? 'bg-light text-primary' : 'bg-light text-dark border')} me-2`}>
+                              {p.tipo_entrega} {p.tipo_entrega === 'REPARTO' ? <i className="bi bi-car-front-fill"></i> : <i className="bi bi-shop"></i>}
+                          </span>
+                          {/* Si mostramos nombre arriba, mostramos la mesa aquí abajo (ajustando color si está seleccionado) */}
+                          {p.nombre_cliente && <small className={`ms-1 ${esSeleccionado ? 'text-white-50' : 'text-muted'}`}>(Mesa {p.mesa})</small>}
+                      </div>
+                      <span className="fw-bold fs-6">{formatoPeso(p.total)}</span>
+                  </div>
+
+                  {p.usuario_email && p.usuario_email.includes('prueba') && (
+                        <small className={`fw-bold d-block mt-1 ${esSeleccionado ? 'text-warning' : 'text-danger'}`} style={{fontSize: '0.7rem'}}>TEST USER</small>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -223,11 +274,31 @@ export const MesasActivas = ({ onEditar }) => {
         <div className="col-8 h-100 p-4 d-flex flex-column">
           {pedidoSeleccionado ? (
             <>
-              <div className="d-flex justify-content-between align-items-center mb-4">
-                <h2 className="m-0">
-                    Mesa {pedidoSeleccionado.mesa} 
-                    <span className="badge bg-warning text-dark ms-2 fs-6">{pedidoSeleccionado.tipo_entrega}</span>
-                </h2>
+              <div className="d-flex justify-content-between align-items-start mb-4">
+                <div>
+                    <h2 className="m-0">
+                        {/* MOSTRAR EL NÚMERO DE PEDIDO AQUI TAMBIÉN */}
+                        <span className="badge bg-dark fs-4 me-3">#{pedidoSeleccionado.numero_pedido}</span>
+                        
+                        {pedidoSeleccionado.nombre_cliente ? (
+                           <span className="text-uppercase">{pedidoSeleccionado.nombre_cliente}</span>
+                        ) : (
+                           <span>Mesa {pedidoSeleccionado.mesa}</span>
+                        )}
+
+                        <span className="badge bg-warning text-dark ms-2 fs-6">{pedidoSeleccionado.tipo_entrega}</span>
+                    </h2>
+                    
+                    {/* DETALLES EXTRA: HORA Y MESA (si hay nombre) */}
+                    <div className="mt-2 text-muted fs-5">
+                        {pedidoSeleccionado.hora_pedido && (
+                            <span className="me-4"><i className="bi bi-clock"></i> <strong>{pedidoSeleccionado.hora_pedido}</strong></span>
+                        )}
+                        {pedidoSeleccionado.nombre_cliente && (
+                            <span><i className="bi bi-layout-sidebar"></i> Mesa: {pedidoSeleccionado.mesa}</span>
+                        )}
+                    </div>
+                </div>
                 
                 <div className="btn-group">
                   <button className="btn btn-outline-primary fw-bold" onClick={() => onEditar(pedidoSeleccionado)}>
@@ -267,13 +338,13 @@ export const MesasActivas = ({ onEditar }) => {
               </div>
               <div className="d-flex justify-content-end align-items-center gap-4 border-top pt-3">
                 <h1 className="text-success m-0">{formatoPeso(pedidoSeleccionado.total)}</h1>
-                {/* Usamos abrirModalPago para resetear estados antes de abrir */}
                 <button className="btn btn-success btn-lg px-5 py-3 fw-bold" onClick={abrirModalPago}><i className="bi bi-cash"></i> PAGAR Y CERRAR</button>
               </div>
             </>
           ) : (
             <div className="d-flex h-100 align-items-center justify-content-center text-muted flex-column">
               <span style={{fontSize: '4rem'}}><i className="bi bi-fork-knife"></i></span><h3>Selecciona una mesa para ver el detalle</h3>
+              {esPrueba && <h5 className="text-danger mt-3">MODO PRUEBA ACTIVO</h5>}
             </div>
           )}
         </div>
@@ -290,33 +361,26 @@ export const MesasActivas = ({ onEditar }) => {
               </div>
               <div className="modal-body p-4">
                 
-                {/* SECCIÓN DE TOTALES Y DESCUENTOS (LAYOUT MEJORADO) */}
+                {/* SECCIÓN DE TOTALES Y DESCUENTOS */}
                 <div className="d-flex justify-content-between align-items-start mb-4 bg-light p-3 rounded border">
-                    
-                    {/* COLUMNA IZQUIERDA: INPUT DE DESCUENTO */}
                     <div className="d-flex flex-column gap-2">
                         <div className="text-muted fw-bold">Subtotal Original: {formatoPeso(totalOriginal)}</div>
-                        
                         <div className="d-flex align-items-center">
                             <label className="me-2 fw-bold text-dark">Descuento (%):</label>
                             <div className="input-group input-group-sm" style={{width: '100px'}}>
                                 <input 
-                                    type="text"  // Cambiado a texto para mejor control
+                                    type="text"
                                     className="form-control fw-bold text-center border-primary text-primary" 
                                     placeholder="0"
                                     value={descuento}
                                     onChange={(e) => {
-                                        // Permitir solo números y vacío
                                         const val = e.target.value;
                                         if (val === '' || /^[0-9\b]+$/.test(val)) {
                                             let numVal = parseInt(val) || 0;
                                             if (numVal > 100) numVal = 100;
-                                            
-                                            // Si es 0, mostramos vacío para que el usuario escriba cómodo
                                             if (val === '') {
                                                 setDescuento('');
                                             } else {
-                                                // Al escribir, parseInt elimina el 0 a la izquierda automáticamente
                                                 setDescuento(numVal.toString()); 
                                             }
                                             setPagos({ efectivo: 0, debito: 0, transferencia: 0, edenred: 0 });
@@ -328,9 +392,7 @@ export const MesasActivas = ({ onEditar }) => {
                         </div>
                     </div>
                     
-                    {/* COLUMNA DERECHA: RESUMEN DE MONTOS */}
                     <div className="text-end">
-                        {/* Mostrar monto descontado si hay descuento */}
                         {descNum > 0 && (
                            <div className="mb-1">
                                <div className="text-danger fw-bold" style={{fontSize: '1.1rem'}}>
@@ -339,7 +401,6 @@ export const MesasActivas = ({ onEditar }) => {
                                <small className="text-muted d-block">(Descuento aplicado)</small>
                            </div>
                         )}
-                        
                         <div className="border-top mt-2 pt-2">
                             <div className="text-muted small text-uppercase fw-bold">Total a Pagar</div>
                             <h1 className="fw-bold text-success m-0" style={{fontSize: '2.5rem'}}>
@@ -348,7 +409,6 @@ export const MesasActivas = ({ onEditar }) => {
                         </div>
                     </div>
                 </div>
-
 
                 <div className="row g-2 mb-4">
                 {['EFECTIVO', 'DEBITO', 'TRANSFERENCIA', 'EDENRED', 'MIXTO'].map((metodo) => {
